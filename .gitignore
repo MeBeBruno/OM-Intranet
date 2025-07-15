@@ -1,0 +1,19 @@
+# Byte‑compiled / optimized
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Database file
+intranet.db
+
+# Logs
+*.log
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+
+# Environment
+.env
