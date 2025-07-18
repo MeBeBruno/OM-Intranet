@@ -2,6 +2,7 @@
 import os
 import secrets
 import re
+import io
 import base64
 from datetime import datetime
 from functools import wraps
@@ -13,6 +14,7 @@ from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 import pyotp
+import qrcode
 
 # ── Load .env ─────────────────────────────────────────────────────────────────
 load_dotenv()  # expects .env in project root
@@ -26,7 +28,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv(
     f"sqlite:///{os.path.join(basedir, 'intranet.db')}"
 )
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024  # 2 MB upload limit
+# Upload limit removed; client will standardize images via JS
 
 # ── Database & Models ─────────────────────────────────────────────────────────
 db = SQLAlchemy(app)
@@ -190,29 +192,30 @@ def dashboard():
 def profile():
     u = User.query.get(session['user_id'])
 
-    # Update profile info
-    if request.method=='POST' and 'update_profile' in request.form:
+    # Update profile info & accept client-standardized 512×512 image
+    if request.method == 'POST' and 'update_profile' in request.form:
         u.display_name = request.form.get('display_name','').strip()[:32] or None
         u.pronouns     = request.form.get('pronouns','').strip()[:32] or None
         bio = request.form.get('bio','').strip()
         u.bio = bio[:500] if bio else None
-        file = request.files.get('profile_pic')
-        if file and file.filename:
-            u.profile_pic = file.read()
+
+        f = request.files.get('profile_pic')
+        if f and f.filename:
+            # assume client-side JS has cropped & resized to exactly 512×512
+            u.profile_pic = f.read()
+
         db.session.commit()
         flash("Profil gespeichert","success")
         return redirect(url_for('profile'))
 
-    # Setup 2FA
-    if request.method=='POST' and 'setup_2fa' in request.form:
+    # Setup or confirm 2FA
+    if request.method == 'POST' and 'setup_2fa' in request.form:
         if not u.twofa_secret:
             u.twofa_secret = pyotp.random_base32()
             db.session.commit()
         flash("Scanne den QR‑Code und bestätige mit einem TOTP-Code","info")
         return redirect(url_for('profile'))
-
-    # Confirm 2FA
-    if request.method=='POST' and 'confirm_2fa' in request.form:
+    if request.method == 'POST' and 'confirm_2fa' in request.form:
         token = request.form.get('token','').strip()
         totp = pyotp.TOTP(u.twofa_secret or '')
         if totp.verify(token):
@@ -224,41 +227,43 @@ def profile():
         return redirect(url_for('profile'))
 
     # Render profile page
-    pic_html = ""
+    pic_html = ''
     if u.profile_pic:
         b64 = base64.b64encode(u.profile_pic).decode()
         pic_html = f"<img src='data:image/png;base64,{b64}' class='profile-pic mb-3'>"
 
+    # 2FA QR code generation
     if u.twofa_enabled:
-        twofa_html = "<p>2FA ist aktiviert.</p>"
+        twofa_html = '<p>2FA ist aktiviert.</p>'
+    elif u.twofa_secret:
+        uri = pyotp.TOTP(u.twofa_secret).provisioning_uri(u.username, issuer_name='Intranet')
+        qr_img = qrcode.make(uri)
+        buf = io.BytesIO()
+        qr_img.save(buf, format='PNG')
+        qr_b64 = base64.b64encode(buf.getvalue()).decode()
+        twofa_html = f"""
+        <h5>2FA einrichten</h5>
+        <img src="data:image/png;base64,{qr_b64}" alt="QR-Code"><br>
+        <form method="post" class="row g-3 mt-2">
+          <input type="hidden" name="confirm_2fa">
+          <div class="col-auto"><input name="token" class="form-control" placeholder="TOTP-Code"></div>
+          <div class="col-auto"><button class="btn btn-primary">Bestätigen</button></div>
+        </form>"""
     else:
-        if u.twofa_secret:
-            uri = pyotp.totp.TOTP(u.twofa_secret).provisioning_uri(u.username, issuer_name="Intranet")
-            qr  = f"https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={uri}"
-            twofa_html = f"""
-            <h5>2FA einrichten</h5>
-            <img src="{qr}"><br>
-            <form method="post" class="row g-3 mt-2">
-              <input type="hidden" name="confirm_2fa">
-              <div class="col-auto"><input name="token" class="form-control" placeholder="TOTP-Code"></div>
-              <div class="col-auto"><button class="btn btn-primary">Bestätigen</button></div>
-            </form>"""
-        else:
-            twofa_html = """
-            <form method="post"><input type="hidden" name="setup_2fa">
-              <button class="btn btn-outline-secondary">2FA einrichten</button>
-            </form>"""
+        twofa_html = """
+        <form method="post"><input type="hidden" name="setup_2fa">
+          <button class="btn btn-outline-secondary">2FA einrichten</button>
+        </form>"""
 
-    body = f"""
-<div class="row">
+    body = f"""<div class="row">
   <div class="col-md-4 text-center">
     {pic_html}
-    <form method="post" enctype="multipart/form-data">
+    <form id="profile-form" method="post" enctype="multipart/form-data">
       <input type="hidden" name="update_profile">
       <div class="mb-2"><input name="display_name" class="form-control" placeholder="Display Name" value="{u.display_name or ''}"></div>
       <div class="mb-2"><input name="pronouns"     class="form-control" placeholder="Pronomen"      value="{u.pronouns    or ''}"></div>
       <div class="mb-2"><textarea name="bio" class="form-control" placeholder="Bio (max 500)">{u.bio or ''}</textarea></div>
-      <div class="mb-3"><input name="profile_pic" type="file" class="form-control"></div>
+      <div class="mb-3"><input id="profile-pic-input" name="profile_pic" type="file" accept="image/*" class="form-control"></div>
       <button class="btn btn-success">Speichern</button>
     </form>
   </div>
@@ -269,6 +274,33 @@ def profile():
     {twofa_html}
   </div>
 </div>
+
+<script>
+// Client-side crop & resize to 512×512 before upload
+document.getElementById('profile-pic-input')
+  .addEventListener('change', function(e) {{
+    const file = e.target.files[0];
+    if (!file) return;
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onload = () => img.src = reader.result;
+    reader.readAsDataURL(file);
+    img.onload = () => {{
+      const size = 512;
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      const [w, h] = [img.width, img.height];
+      const m = Math.min(w, h), sx = (w - m) / 2, sy = (h - m) / 2;
+      ctx.drawImage(img, sx, sy, m, m, 0, 0, size, size);
+      canvas.toBlob(blob => {{
+        const dt = new DataTransfer();
+        dt.items.add(new File([blob], file.name, {{ type: 'image/png' }}));
+        e.target.files = dt.files;
+      }}, 'image/png');
+    }};
+  }});
+</script>
 """
     return render_page("Profil", body)
 
@@ -348,7 +380,6 @@ def users():
         db.session.commit()
         flash(f"Neuer Code: {nc}","success")
         return redirect(url_for('users'))
-
     codes_rows = "".join(f"""
       <tr><td>{c.code}</td><td>{c.used}/{c.max_uses}</td>
       <td>{'Admin' if c.is_admin else 'User'}</td>
