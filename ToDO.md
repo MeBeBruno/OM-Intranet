@@ -8,3 +8,4 @@
 - Auf Profil Jahrgang anzeigen (Bei Registrierung Codes mit Jahrgang versehen? Als Tags-List auf dem Profil implementieren?)
 - Recovery Codes
 - Shared "Notes"
+- Seiten, Blogs, Info-Dinger etc. (HTML Unterseiten)
