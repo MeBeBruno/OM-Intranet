@@ -1,6 +1,6 @@
 # ToDos:
 
-- E-Mail Distributor
+- E-Mail Distributor -> Setting in den Einstellungen auf der Profilseite
 - Kalender für alle
 - Telefonnummer, Primär-E-Mail-Adresse
 - Profilseiten von anderen Aufrufen
@@ -9,3 +9,11 @@
 - Recovery Codes
 - Shared "Notes"
 - Seiten, Blogs, Info-Dinger etc. (HTML Unterseiten)
+- Quasi-Counter -> Wetten
+- Petitionen
+- Bilderablage
+
+---
+
+- DDOS vorbeugen
+- Sicherheit verstärken
